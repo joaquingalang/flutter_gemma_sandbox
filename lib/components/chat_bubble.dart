@@ -11,11 +11,13 @@ class ChatBubble extends StatelessWidget {
     required this.content,
     required this.sender,
     this.imageBytes,
+    this.hasAudio = false,
   });
 
   final String content;
   final Sender sender;
   final Uint8List? imageBytes;
+  final bool hasAudio;
 
   @override
   Widget build(BuildContext context) {
@@ -42,13 +44,29 @@ class ChatBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Image
               if (imageBytes != null)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Image.memory(imageBytes!, fit: BoxFit.cover),
                 ),
-              if (imageBytes != null && content.isNotEmpty)
+              if (imageBytes != null && (content.isNotEmpty || hasAudio))
                 SizedBox(height: 6),
+
+              // Audio chip
+              if (hasAudio)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.mic, size: 14, color: Colors.white70),
+                    SizedBox(width: 4),
+                    Text('Audio', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                  ],
+                ),
+              if (hasAudio && content.isNotEmpty)
+                SizedBox(height: 4),
+
+              // Text / Markdown
               if (content.isNotEmpty)
                 sender == Sender.gemma
                     ? MarkdownBody(

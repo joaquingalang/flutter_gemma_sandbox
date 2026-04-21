@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,8 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_sandbox/components/chat_bubble.dart';
 import 'package:flutter_gemma_sandbox/enums/sender.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
 
 const _modelUrl =
     'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
@@ -28,7 +31,11 @@ class _ChatPageState extends State<ChatPage> {
   InferenceChat? _chat;
   bool _isGenerating = false;
   String _streamingBuffer = '';
+
   Uint8List? _pendingImageBytes;
+  Uint8List? _pendingAudioBytes;
+  bool _isRecording = false;
+  final AudioRecorder _recorder = AudioRecorder();
 
   final TextEditingController _messageController = TextEditingController();
   final List<ChatBubble> _logs = [];
@@ -37,6 +44,12 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    _recorder.dispose();
+    super.dispose();
   }
 
   Future<void> _bootstrap() async {
@@ -75,11 +88,13 @@ class _ChatPageState extends State<ChatPage> {
         maxTokens: 2048,
         preferredBackend: PreferredBackend.gpu,
         supportImage: true,
+        supportAudio: true,
       );
       print('[bootstrap] Model loaded. Creating chat session...');
 
       final chat = await model.createChat(
         supportImage: true,
+        supportAudio: true,
         systemInstruction: 'You are a helpful assistant. Be concise and clear.',
       );
       print('[bootstrap] Chat session ready.');
@@ -106,24 +121,60 @@ class _ChatPageState extends State<ChatPage> {
     setState(() => _pendingImageBytes = bytes);
   }
 
+  Future<void> _startRecording() async {
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) return;
+    final dir = await getTemporaryDirectory();
+    final path = '${dir.path}/gemma_audio.wav';
+    await _recorder.start(
+      RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1),
+      path: path,
+    );
+    setState(() => _isRecording = true);
+  }
+
+  Future<void> _stopRecording() async {
+    final path = await _recorder.stop();
+    if (path == null) return;
+    final bytes = await File(path).readAsBytes();
+    setState(() {
+      _isRecording = false;
+      _pendingAudioBytes = bytes;
+    });
+  }
+
   Future<void> _sendUserMessage() async {
     if (_chat == null || _isGenerating) return;
     final content = _messageController.text.trim();
-    if (content.isEmpty && _pendingImageBytes == null) return;
+    if (content.isEmpty && _pendingImageBytes == null && _pendingAudioBytes == null) return;
 
     final imageBytes = _pendingImageBytes;
+    final audioBytes = _pendingAudioBytes;
     _messageController.clear();
     setState(() {
-      _logs.insert(0, ChatBubble(content: content, sender: Sender.user, imageBytes: imageBytes));
+      _logs.insert(0, ChatBubble(
+        content: content,
+        sender: Sender.user,
+        imageBytes: imageBytes,
+        hasAudio: audioBytes != null,
+      ));
       _isGenerating = true;
       _streamingBuffer = '';
       _pendingImageBytes = null;
+      _pendingAudioBytes = null;
     });
 
     try {
-      final message = imageBytes != null
-          ? Message.withImage(text: content, imageBytes: imageBytes, isUser: true)
-          : Message.text(text: content, isUser: true);
+      final Message message;
+      if (imageBytes != null) {
+        message = Message.withImage(text: content, imageBytes: imageBytes, isUser: true);
+      } else if (audioBytes != null && content.isNotEmpty) {
+        message = Message.withAudio(text: content, audioBytes: audioBytes, isUser: true);
+      } else if (audioBytes != null) {
+        message = Message.audioOnly(audioBytes: audioBytes, isUser: true);
+      } else {
+        message = Message.text(text: content, isUser: true);
+      }
 
       await _chat!.addQueryChunk(message);
 
@@ -179,9 +230,14 @@ class _ChatPageState extends State<ChatPage> {
               streamingBuffer: _streamingBuffer,
               messageController: _messageController,
               pendingImageBytes: _pendingImageBytes,
+              pendingAudioBytes: _pendingAudioBytes,
+              isRecording: _isRecording,
               onSend: _sendUserMessage,
               onPickImage: _pickImage,
               onClearImage: () => setState(() => _pendingImageBytes = null),
+              onStartRecord: _startRecording,
+              onStopRecord: _stopRecording,
+              onClearAudio: () => setState(() => _pendingAudioBytes = null),
             ),
         },
       ),
@@ -276,9 +332,14 @@ class _ChatView extends StatelessWidget {
     required this.streamingBuffer,
     required this.messageController,
     required this.pendingImageBytes,
+    required this.pendingAudioBytes,
+    required this.isRecording,
     required this.onSend,
     required this.onPickImage,
     required this.onClearImage,
+    required this.onStartRecord,
+    required this.onStopRecord,
+    required this.onClearAudio,
   });
 
   final List<ChatBubble> logs;
@@ -286,12 +347,19 @@ class _ChatView extends StatelessWidget {
   final String streamingBuffer;
   final TextEditingController messageController;
   final Uint8List? pendingImageBytes;
+  final Uint8List? pendingAudioBytes;
+  final bool isRecording;
   final VoidCallback onSend;
   final VoidCallback onPickImage;
   final VoidCallback onClearImage;
+  final VoidCallback onStartRecord;
+  final VoidCallback onStopRecord;
+  final VoidCallback onClearAudio;
 
   @override
   Widget build(BuildContext context) {
+    final bool inputBlocked = isGenerating || isRecording;
+
     return Column(
       children: [
         Expanded(
@@ -331,6 +399,37 @@ class _ChatView extends StatelessWidget {
             ),
           ),
 
+        // Audio preview strip
+        if (pendingAudioBytes != null)
+          Container(
+            color: Colors.white,
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Color(0xFFD6EEFF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.mic, size: 18, color: Color(0xFF7AAACE)),
+                      SizedBox(width: 6),
+                      Text('Audio recorded', style: TextStyle(fontSize: 13, color: Color(0xFF7AAACE))),
+                    ],
+                  ),
+                ),
+                SizedBox(width: 8),
+                GestureDetector(
+                  onTap: onClearAudio,
+                  child: Icon(Icons.cancel, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+
         Container(
           width: double.infinity,
           height: 80,
@@ -346,10 +445,24 @@ class _ChatView extends StatelessWidget {
             children: [
               // Image picker button
               GestureDetector(
-                onTap: isGenerating ? null : onPickImage,
+                onTap: inputBlocked ? null : onPickImage,
                 child: Icon(
                   Icons.image_outlined,
-                  color: isGenerating ? Colors.grey.shade300 : Color(0xFF7AAACE),
+                  color: inputBlocked ? Colors.grey.shade300 : Color(0xFF7AAACE),
+                  size: 28,
+                ),
+              ),
+
+              // Mic button
+              GestureDetector(
+                onTap: isGenerating ? null : (isRecording ? onStopRecord : onStartRecord),
+                child: Icon(
+                  isRecording ? Icons.stop_circle : Icons.mic_outlined,
+                  color: isGenerating
+                      ? Colors.grey.shade300
+                      : isRecording
+                          ? Colors.red
+                          : Color(0xFF7AAACE),
                   size: 28,
                 ),
               ),
@@ -357,11 +470,11 @@ class _ChatView extends StatelessWidget {
               Expanded(
                 child: TextField(
                   controller: messageController,
-                  enabled: !isGenerating,
+                  enabled: !inputBlocked,
                   style: TextStyle(fontWeight: FontWeight.w500),
                   cursorColor: Color(0xFF9CD5FF),
                   decoration: InputDecoration(
-                    hintText: 'Message',
+                    hintText: isRecording ? 'Recording…' : 'Message',
                     contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 0),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(width: 1, color: Colors.grey),
@@ -379,9 +492,9 @@ class _ChatView extends StatelessWidget {
               ),
 
               Opacity(
-                opacity: isGenerating ? 0.4 : 1.0,
+                opacity: inputBlocked ? 0.4 : 1.0,
                 child: GestureDetector(
-                  onTap: isGenerating ? null : onSend,
+                  onTap: inputBlocked ? null : onSend,
                   child: Container(
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(4),
