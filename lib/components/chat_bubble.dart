@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_gemma_sandbox/enums/sender.dart';
 import 'package:sizer/sizer.dart';
 
@@ -30,7 +31,15 @@ class ChatBubble extends StatelessWidget {
             ),
           ),
           constraints: BoxConstraints(maxWidth: 60.w),
-          child: Text(content, style: TextStyle(fontSize: 16)),
+          child: sender == Sender.gemma
+              ? MarkdownBody(
+                  data: content,
+                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                    p: TextStyle(fontSize: 16),
+                    code: TextStyle(fontSize: 14, backgroundColor: Colors.black12),
+                  ),
+                )
+              : Text(content, style: TextStyle(fontSize: 16)),
         ),
       ],
     );
