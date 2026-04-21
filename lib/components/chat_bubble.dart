@@ -1,13 +1,21 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_gemma_sandbox/enums/sender.dart';
 import 'package:sizer/sizer.dart';
 
 class ChatBubble extends StatelessWidget {
-  const ChatBubble({super.key, required this.content, required this.sender});
+  const ChatBubble({
+    super.key,
+    required this.content,
+    required this.sender,
+    this.imageBytes,
+  });
 
   final String content;
   final Sender sender;
+  final Uint8List? imageBytes;
 
   @override
   Widget build(BuildContext context) {
@@ -31,15 +39,28 @@ class ChatBubble extends StatelessWidget {
             ),
           ),
           constraints: BoxConstraints(maxWidth: 60.w),
-          child: sender == Sender.gemma
-              ? MarkdownBody(
-                  data: content,
-                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                    p: TextStyle(fontSize: 16),
-                    code: TextStyle(fontSize: 14, backgroundColor: Colors.black12),
-                  ),
-                )
-              : Text(content, style: TextStyle(fontSize: 16)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (imageBytes != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(imageBytes!, fit: BoxFit.cover),
+                ),
+              if (imageBytes != null && content.isNotEmpty)
+                SizedBox(height: 6),
+              if (content.isNotEmpty)
+                sender == Sender.gemma
+                    ? MarkdownBody(
+                        data: content,
+                        styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                          p: TextStyle(fontSize: 16),
+                          code: TextStyle(fontSize: 14, backgroundColor: Colors.black12),
+                        ),
+                      )
+                    : Text(content, style: TextStyle(fontSize: 16)),
+            ],
+          ),
         ),
       ],
     );

@@ -1,8 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_sandbox/components/chat_bubble.dart';
 import 'package:flutter_gemma_sandbox/enums/sender.dart';
+import 'package:image_picker/image_picker.dart';
 
 const _modelUrl =
     'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm';
@@ -25,6 +28,7 @@ class _ChatPageState extends State<ChatPage> {
   InferenceChat? _chat;
   bool _isGenerating = false;
   String _streamingBuffer = '';
+  Uint8List? _pendingImageBytes;
 
   final TextEditingController _messageController = TextEditingController();
   final List<ChatBubble> _logs = [];
@@ -70,10 +74,12 @@ class _ChatPageState extends State<ChatPage> {
       final model = await FlutterGemma.getActiveModel(
         maxTokens: 2048,
         preferredBackend: PreferredBackend.gpu,
+        supportImage: true,
       );
       print('[bootstrap] Model loaded. Creating chat session...');
 
       final chat = await model.createChat(
+        supportImage: true,
         systemInstruction: 'You are a helpful assistant. Be concise and clear.',
       );
       print('[bootstrap] Chat session ready.');
@@ -92,20 +98,34 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final file = await picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+    final bytes = await file.readAsBytes();
+    setState(() => _pendingImageBytes = bytes);
+  }
+
   Future<void> _sendUserMessage() async {
     if (_chat == null || _isGenerating) return;
     final content = _messageController.text.trim();
-    if (content.isEmpty) return;
+    if (content.isEmpty && _pendingImageBytes == null) return;
 
+    final imageBytes = _pendingImageBytes;
     _messageController.clear();
     setState(() {
-      _logs.insert(0, ChatBubble(content: content, sender: Sender.user));
+      _logs.insert(0, ChatBubble(content: content, sender: Sender.user, imageBytes: imageBytes));
       _isGenerating = true;
       _streamingBuffer = '';
+      _pendingImageBytes = null;
     });
 
     try {
-      await _chat!.addQueryChunk(Message.text(text: content, isUser: true));
+      final message = imageBytes != null
+          ? Message.withImage(text: content, imageBytes: imageBytes, isUser: true)
+          : Message.text(text: content, isUser: true);
+
+      await _chat!.addQueryChunk(message);
 
       _chat!.generateChatResponseAsync().listen(
         (response) {
@@ -158,7 +178,10 @@ class _ChatPageState extends State<ChatPage> {
               isGenerating: _isGenerating,
               streamingBuffer: _streamingBuffer,
               messageController: _messageController,
+              pendingImageBytes: _pendingImageBytes,
               onSend: _sendUserMessage,
+              onPickImage: _pickImage,
+              onClearImage: () => setState(() => _pendingImageBytes = null),
             ),
         },
       ),
@@ -252,14 +275,20 @@ class _ChatView extends StatelessWidget {
     required this.isGenerating,
     required this.streamingBuffer,
     required this.messageController,
+    required this.pendingImageBytes,
     required this.onSend,
+    required this.onPickImage,
+    required this.onClearImage,
   });
 
   final List<ChatBubble> logs;
   final bool isGenerating;
   final String streamingBuffer;
   final TextEditingController messageController;
+  final Uint8List? pendingImageBytes;
   final VoidCallback onSend;
+  final VoidCallback onPickImage;
+  final VoidCallback onClearImage;
 
   @override
   Widget build(BuildContext context) {
@@ -282,10 +311,30 @@ class _ChatView extends StatelessWidget {
           ),
         ),
 
+        // Image preview strip
+        if (pendingImageBytes != null)
+          Container(
+            color: Colors.white,
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(pendingImageBytes!, height: 64, width: 64, fit: BoxFit.cover),
+                ),
+                SizedBox(width: 8),
+                GestureDetector(
+                  onTap: onClearImage,
+                  child: Icon(Icons.cancel, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+
         Container(
           width: double.infinity,
           height: 80,
-          padding: EdgeInsets.symmetric(horizontal: 20),
+          padding: EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             color: Colors.white,
             boxShadow: [
@@ -293,8 +342,18 @@ class _ChatView extends StatelessWidget {
             ],
           ),
           child: Row(
-            spacing: 10,
+            spacing: 8,
             children: [
+              // Image picker button
+              GestureDetector(
+                onTap: isGenerating ? null : onPickImage,
+                child: Icon(
+                  Icons.image_outlined,
+                  color: isGenerating ? Colors.grey.shade300 : Color(0xFF7AAACE),
+                  size: 28,
+                ),
+              ),
+
               Expanded(
                 child: TextField(
                   controller: messageController,
