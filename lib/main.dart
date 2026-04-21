@@ -26,7 +26,7 @@ class FlutterGemmaSandbox extends StatelessWidget {
     return Sizer(
       builder: (context, orientation, screenType) {
         return MaterialApp(
-          home: ChatPage(),
+          home: ChatPage(systemInstruction: 'You are a helpful assistant. Be concise and clear.'),
           debugShowCheckedModeBanner: false,
         );
       }
